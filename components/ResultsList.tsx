@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, Copy, Download, ExternalLink, Pause, Play } from "lucide-react";
+import { Download, ExternalLink, Pause, Play } from "lucide-react";
 import type { SoundEffect } from "@/lib/types";
 
 function createDemoPreview(sound: SoundEffect) {
@@ -51,7 +51,8 @@ function createDemoPreview(sound: SoundEffect) {
 }
 
 function formatDuration(seconds: number) {
-  return `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(2).padStart(5, "0")}`;
+  const safeSeconds = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(safeSeconds / 60)}:${String(safeSeconds % 60).padStart(2, "0")}`;
 }
 
 function MiniWaveform({
@@ -76,7 +77,7 @@ function MiniWaveform({
     context.clearRect(0, 0, canvas.width, canvas.height);
     for (let index = 0; index < 56; index += 1) {
       const height = 6 + Math.abs(Math.sin((index + seed) * 1.13) * 18) + Math.abs(Math.cos((index + seed) * 0.39) * 8);
-      context.fillStyle = index / 56 < progress ? "#00f2fe" : "#59647a";
+      context.fillStyle = index / 56 < progress ? "#A4B9DD" : "#596987";
       context.fillRect(index * 6.3, (canvas.height - height) / 2, 2.5, height);
     }
   }, [progress, seed]);
@@ -99,9 +100,8 @@ function MiniWaveform({
 
 export default function ResultsList({ results }: { results: SoundEffect[] }) {
   const [activeId, setActiveId] = useState<string | number | null>(null);
-  const [copiedId, setCopiedId] = useState<string | number | null>(null);
-  const [copyFailedId, setCopyFailedId] = useState<string | number | null>(null);
   const [progress, setProgress] = useState(0);
+  const [playbackTime, setPlaybackTime] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
 
@@ -129,6 +129,7 @@ export default function ResultsList({ results }: { results: SoundEffect[] }) {
     const audio = new Audio(source);
     audioRef.current = audio;
     setProgress(0);
+    setPlaybackTime(0);
     audio.onended = () => {
       if (objectUrlRef.current === source) {
         URL.revokeObjectURL(source);
@@ -136,6 +137,7 @@ export default function ResultsList({ results }: { results: SoundEffect[] }) {
       }
       setActiveId(null);
       setProgress(0);
+      setPlaybackTime(0);
     };
     audio.onerror = () => {
       if (objectUrlRef.current === source) {
@@ -144,9 +146,13 @@ export default function ResultsList({ results }: { results: SoundEffect[] }) {
       }
       setActiveId(null);
       setProgress(0);
+      setPlaybackTime(0);
     };
     audio.ontimeupdate = () => {
-      if (audio.duration) setProgress(audio.currentTime / audio.duration);
+      if (audio.duration) {
+        setProgress(audio.currentTime / audio.duration);
+        setPlaybackTime(audio.currentTime);
+      }
     };
     void audio.play().then(() => setActiveId(sound.id)).catch(() => {
       if (objectUrlRef.current === source) {
@@ -154,6 +160,7 @@ export default function ResultsList({ results }: { results: SoundEffect[] }) {
         objectUrlRef.current = null;
       }
       setActiveId(null);
+      setPlaybackTime(0);
     });
   }
 
@@ -161,6 +168,7 @@ export default function ResultsList({ results }: { results: SoundEffect[] }) {
     if (activeId !== soundId || !audioRef.current?.duration) return;
     audioRef.current.currentTime = fraction * audioRef.current.duration;
     setProgress(fraction);
+    setPlaybackTime(audioRef.current.currentTime);
   }
 
   function downloadPreview(sound: SoundEffect) {
@@ -175,23 +183,9 @@ export default function ResultsList({ results }: { results: SoundEffect[] }) {
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  async function copyLink(sound: SoundEffect) {
-    try {
-      await navigator.clipboard.writeText(sound.source_url);
-      setCopiedId(sound.id);
-      setCopyFailedId(null);
-      window.setTimeout(() => setCopiedId(null), 1600);
-    } catch (error) {
-      console.error("Could not copy sound link.", error);
-      setCopyFailedId(sound.id);
-      window.setTimeout(() => setCopyFailedId(null), 2200);
-    }
-  }
-
   return (
     <div className="results-list">
       {results.map((sound, index) => {
-        const tag = sound.tags[0] ?? "sound";
         const active = activeId === sound.id;
         const isDemo = String(sound.id).startsWith("demo-");
         return (
@@ -207,44 +201,46 @@ export default function ResultsList({ results }: { results: SoundEffect[] }) {
             <div className="sound-main">
               <div className="sound-name-row">
                 <h3>{sound.name}</h3>
-                <span className="source-label">{isDemo ? "DEMO" : "FREESOUND"}</span>
-                {sound.match_score !== undefined && <span className="score">· {sound.match_score}% MATCH</span>}
+                {sound.match_score !== undefined && <span className="score">{sound.match_score}% MATCH</span>}
+                <span className="source-label">{isDemo ? "DEMO PREVIEW" : "FREESOUND"}</span>
+                <span className="sound-id font-mono">
+                  {isDemo ? `DEMO-${String(index + 1).padStart(2, "0")}` : `FS-${sound.id}`}
+                </span>
               </div>
               <div className="sound-detail-row">
-                <MiniWaveform
-                  seed={index + sound.name.length}
-                  progress={active ? progress : 0}
-                  name={sound.name}
-                  onSeek={(fraction) => seekPreview(sound.id, fraction)}
-                />
                 <div className="sound-tags">
-                  <span className={`category-tag tone-${index % 3}`}>{tag.toUpperCase()}</span>
-                  {sound.tags.slice(1, 3).map((item) => <span className="quiet-tag" key={item}>{item}</span>)}
+                  {sound.tags.slice(0, 3).map((item, tagIndex) => (
+                    <span className={`category-tag tone-${(index + tagIndex) % 3}`} key={item}>{item}</span>
+                  ))}
+                </div>
+                <div className="waveform-control">
+                  <MiniWaveform
+                    seed={index + sound.name.length}
+                    progress={active ? progress : 0}
+                    name={sound.name}
+                    onSeek={(fraction) => seekPreview(sound.id, fraction)}
+                  />
+                  <span className="waveform-time font-mono" aria-live="off">
+                    {formatDuration(active ? playbackTime : 0)} / {formatDuration(sound.duration)}
+                  </span>
                 </div>
               </div>
             </div>
-            <div className="sound-meta">
-              <span className="duration">{formatDuration(sound.duration)}</span>
-              <span className={`license ${isDemo ? "demo-license" : ""}`}>{sound.license}</span>
-            </div>
+            {!isDemo && <span className="sound-license">{sound.license}</span>}
             <div className="sound-actions">
-              <button onClick={() => void copyLink(sound)} aria-label="Copy source link">
-                {copiedId === sound.id ? <Check size={12} /> : <Copy size={12} />}
-                {copiedId === sound.id ? "COPIED" : copyFailedId === sound.id ? "COPY FAILED" : "COPY LINK"}
-              </button>
               {sound.download_url ? (
-                <a href={sound.download_url} download target="_blank" rel="noreferrer" aria-label="Download preview">
-                  <Download size={12} /> DOWNLOAD
+                <a href={sound.download_url} download target="_blank" rel="noreferrer" aria-label="Download sound preview">
+                  <Download size={14} /> <span>Download</span>
                 </a>
               ) : isDemo ? (
                 <button onClick={() => downloadPreview(sound)} aria-label="Download synthetic preview">
-                  <Download size={12} /> DOWNLOAD WAV
+                  <Download size={14} /> <span>Download</span>
                 </button>
               ) : (
-                <span className="disabled-action"><Download size={12} /> DOWNLOAD</span>
+                <span className="disabled-action"><Download size={14} /> <span>Download</span></span>
               )}
-              <a className="source-action" href={sound.source_url} target="_blank" rel="noreferrer" aria-label="View on Freesound">
-                <ExternalLink size={13} />
+              <a className="source-action" href={sound.source_url} target="_blank" rel="noreferrer" aria-label="Open on Freesound">
+                <ExternalLink size={14} /> <span>Freesound</span>
               </a>
             </div>
           </article>

@@ -13,9 +13,57 @@ type VocalRecorderProps = {
   onReset: () => void;
   busy: boolean;
   activityStatus: string;
+  caption: string;
+  workflowError: string;
 };
 
 type RecorderPhase = "ready" | "recording" | "processing" | "error";
+
+function drawWaveform(ctx: CanvasRenderingContext2D, samples?: Uint8Array, level = 0) {
+  const width = ctx.canvas.width;
+  const center = ctx.canvas.height / 2;
+  const pointCount = 128;
+  const amplitudes = Array.from({ length: pointCount }, (_, index) => {
+    if (!samples) {
+      const position = index / (pointCount - 1);
+      const envelope = Math.pow(Math.sin(Math.PI * position), 0.65);
+      const detail = 0.25 + Math.abs(
+        Math.sin(index * 0.19) * 0.45 + Math.sin(index * 0.47) * 0.3,
+      );
+      return 2 + envelope * detail * 21;
+    }
+
+    const start = Math.floor(index * samples.length / pointCount);
+    const end = Math.max(start + 1, Math.floor((index + 1) * samples.length / pointCount));
+    let peak = 0;
+    for (let sampleIndex = start; sampleIndex < end; sampleIndex += 1) {
+      peak = Math.max(peak, Math.abs(samples[sampleIndex] - 128) / 128);
+    }
+    return Math.min(29, Math.max(2, peak * Math.min(200, 8 / Math.max(level, 0.04))));
+  });
+
+  ctx.clearRect(0, 0, width, ctx.canvas.height);
+  ctx.beginPath();
+  amplitudes.forEach((amplitude, index) => {
+    const x = (index / (pointCount - 1)) * width;
+    const y = center - amplitude;
+    if (index === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  for (let index = amplitudes.length - 1; index >= 0; index -= 1) {
+    const x = (index / (pointCount - 1)) * width;
+    ctx.lineTo(x, center + amplitudes[index]);
+  }
+  ctx.closePath();
+  ctx.strokeStyle = "#A4B9DD";
+  ctx.lineWidth = 2;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.shadowColor = "rgba(164, 185, 221, .55)";
+  ctx.shadowBlur = 7;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+}
 
 export default function VocalRecorder({
   id,
@@ -24,6 +72,8 @@ export default function VocalRecorder({
   onReset,
   busy,
   activityStatus,
+  caption,
+  workflowError,
 }: VocalRecorderProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -48,19 +98,7 @@ export default function VocalRecorder({
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
-    const width = canvas.width;
-    const center = width / 2;
-    ctx.clearRect(0, 0, width, canvas.height);
-    ctx.strokeStyle = "rgba(0, 242, 254, .55)";
-    ctx.lineWidth = 2;
-    for (let i = -42; i <= 42; i += 1) {
-      const height = 3 + Math.abs(Math.sin(i * 0.71) * 11) + (i % 5 === 0 ? 6 : 0);
-      const x = center + i * 4.1;
-      ctx.beginPath();
-      ctx.moveTo(x, 35 - height / 2);
-      ctx.lineTo(x, 35 + height / 2);
-      ctx.stroke();
-    }
+    drawWaveform(ctx);
   }, []);
 
   const cleanup = useCallback(() => {
@@ -144,18 +182,7 @@ export default function VocalRecorder({
         }
 
         if (canvas && canvasContext) {
-          canvasContext.clearRect(0, 0, canvas.width, canvas.height);
-          canvasContext.lineWidth = 2;
-          canvasContext.strokeStyle = "#00f2fe";
-          for (let i = 0; i < 76; i += 1) {
-            const value = Math.abs(samples[(i * 3) % samples.length] - 128) / 128;
-            const height = 3 + value * 29;
-            const x = 70 + i * ((canvas.width - 140) / 75);
-            canvasContext.beginPath();
-            canvasContext.moveTo(x, 35 - height / 2);
-            canvasContext.lineTo(x, 35 + height / 2);
-            canvasContext.stroke();
-          }
+          drawWaveform(canvasContext, samples, level);
         }
         animationRef.current = requestAnimationFrame(render);
       };
@@ -185,17 +212,17 @@ export default function VocalRecorder({
     : busy || phase === "processing"
       ? activityStatus
       : phase === "error"
-        ? error.toUpperCase()
+        ? "RECORDING ERROR"
         : activityStatus;
 
   return (
     <section id={id} className={`recorder-panel ${isRecording ? "is-recording" : ""}`} aria-label="Vocal recording">
       <div className="recorder-heading">
         <div>
-          <span>INPUT / VOCAL CUE</span>
+          <span>YOUR SOUND, YOUR SEARCH</span>
           <small>UP TO 10 SECONDS · AUDIO IS SENT FOR DESCRIPTION</small>
         </div>
-        <AudioLines size={17} className="cyan-icon" />
+        <span className="recorder-live-label"><i className={isRecording ? "pulse-dot" : ""} />{isRecording ? "RECORDING" : busy ? "PROCESSING" : "READY"}</span>
       </div>
       <div className="recorder-stage">
         <div className="orbit orbit-one" />
@@ -215,10 +242,28 @@ export default function VocalRecorder({
           {isRecording ? "TAP TO FINISH" : busy ? "PLEASE WAIT" : "TAP TO RECORD"}
         </span>
       </div>
-      <div className="visualizer"><canvas ref={canvasRef} width={760} height={70} aria-label="Live audio waveform" /></div>
+      <div className={`visualizer${isRecording ? " is-live" : ""}`}>
+        <canvas ref={canvasRef} width={760} height={70} aria-label="Live audio waveform" />
+      </div>
+      {caption && (
+        <div className="caption-card" aria-live="polite">
+          <div className="caption-terminal-header">
+            <span className="caption-eyebrow"><AudioLines size={12} /> OUTPUT / SEARCH PHRASE</span>
+            <span className="caption-category">[ INPUT: VOCAL ]</span>
+          </div>
+          <p className="caption-output">{caption}</p>
+        </div>
+      )}
+      {workflowError && <p className="workflow-error" role="alert">{workflowError}</p>}
       <div className="recorder-footer">
-        <span className={phase === "error" ? "error-status" : ""}><i className={isRecording ? "pulse-dot" : ""} /> {statusText}</span>
-        <span className="frequency-note">48 KHZ / MONO</span>
+        <span className={`recorder-status${phase === "error" || workflowError ? " error-status" : ""}`} role={busy ? "status" : undefined}>
+          <i className={isRecording || busy ? "pulse-dot" : ""} /> {statusText}
+        </span>
+        <span className="recorder-technical">
+          <span>48 KHZ</span>
+          <span>MONO</span>
+          <span>10 SEC MAX</span>
+        </span>
         <button className="reset-button" onClick={() => {
           discardRecordingRef.current = true;
           stopRecording();
